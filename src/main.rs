@@ -1,30 +1,104 @@
-//! Blinks the LED on a Pico board
+//! USB HID Button Box with 2 buttons
 //!
-//! This will blink an LED attached to GP25, which is the pin the Pico uses for the on-board LED.
+//! This implements a USB HID device that reports button states for a 2-button box.
 #![no_std]
 #![no_main]
+
+mod hid_descriptor;
 
 use bsp::entry;
 use defmt::*;
 use defmt_rtt as _;
-use embedded_hal::digital::OutputPin;
+use embedded_hal::digital::InputPin;
 use panic_probe as _;
 
 // Provide an alias for our BSP so we can switch targets quickly.
-// Uncomment the BSP you included in Cargo.toml, the rest of the code does not need to change.
 use rp_pico as bsp;
-// use sparkfun_pro_micro_rp2040 as bsp;
 
 use bsp::hal::{
-    clocks::{Clock, init_clocks_and_plls},
+    clocks::{init_clocks_and_plls, Clock},
+    gpio::{FunctionSio, Pin, PullUp, SioInput},
     pac,
     sio::Sio,
+    usb::UsbBus,
     watchdog::Watchdog,
 };
 
+use usb_device::{class_prelude::*, prelude::*};
+use usbd_hid::{descriptor::generator_prelude::*, hid_class::HIDClass};
+
+// HID Report descriptor for a 2-button gamepad
+#[gen_hid_descriptor(
+    (collection = APPLICATION, usage_page = GENERIC_DESKTOP, usage = GAMEPAD) = {
+        (collection = PHYSICAL, usage = POINTER) = {
+            (usage_page = BUTTON, usage_min = 0x01, usage_max = 0x02) = {
+                #[packed_bits 2] #[item_settings data,variable,absolute] buttons=input;
+            };
+            // Padding to align to byte boundary
+            #[packed_bits 6] #[item_settings constant,variable,absolute] padding=input;
+        };
+    }
+)]
+pub struct ButtonBoxReport {
+    pub buttons: u8,
+    pub padding: u8,
+}
+
+// GPIO pin type aliases for button inputs
+type Button1Pin = Pin<bsp::hal::gpio::bank0::Gpio23, FunctionSio<SioInput>, PullUp>;
+type Button2Pin = Pin<bsp::hal::gpio::bank0::Gpio15, FunctionSio<SioInput>, PullUp>;
+
+struct ButtonBox {
+    button1: Button1Pin,
+    button2: Button2Pin,
+    last_report: ButtonBoxReport,
+}
+
+impl ButtonBox {
+    fn new(button1: Button1Pin, button2: Button2Pin) -> Self {
+        Self {
+            button1,
+            button2,
+            last_report: ButtonBoxReport {
+                buttons: 0,
+                padding: 0,
+            },
+        }
+    }
+
+    fn read_buttons(&mut self) -> ButtonBoxReport {
+        let mut buttons = 0u8;
+
+        // Read button states (buttons are active low with pull-up resistors)
+        if self.button1.is_low().unwrap_or(false) {
+            buttons |= 0x01; // Button 1
+        }
+        if self.button2.is_low().unwrap_or(false) {
+            buttons |= 0x02; // Button 2
+        }
+
+        ButtonBoxReport {
+            buttons,
+            padding: 0,
+        }
+    }
+
+    fn has_changed(&mut self) -> bool {
+        let current_report = self.read_buttons();
+        let changed = current_report.buttons != self.last_report.buttons;
+        self.last_report = current_report;
+        changed
+    }
+
+    fn get_report(&self) -> ButtonBoxReport {
+        self.last_report
+    }
+}
+
 #[entry]
 fn main() -> ! {
-    info!("Program start");
+    info!("Button Box starting...");
+
     let mut pac = pac::Peripherals::take().unwrap();
     let core = pac::CorePeripherals::take().unwrap();
     let mut watchdog = Watchdog::new(pac.WATCHDOG);
@@ -44,8 +118,6 @@ fn main() -> ! {
     .ok()
     .unwrap();
 
-    let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
-
     let pins = bsp::Pins::new(
         pac.IO_BANK0,
         pac.PADS_BANK0,
@@ -53,24 +125,65 @@ fn main() -> ! {
         &mut pac.RESETS,
     );
 
-    // This is the correct pin on the Raspberry Pico board. On other boards, even if they have an
-    // on-board LED, it might need to be changed.
-    //
-    // Notably, on the Pico W, the LED is not connected to any of the RP2040 GPIOs but to the cyw43 module instead.
-    // One way to do that is by using [embassy](https://github.com/embassy-rs/embassy/blob/main/examples/rp/src/bin/wifi_blinky.rs)
-    //
-    // If you have a Pico W and want to toggle a LED with a simple GPIO output pin, you can connect an external
-    // LED to one of the GPIO pins, and reference that pin here. Don't forget adding an appropriate resistor
-    // in series with the LED.
-    let mut led_pin = pins.led.into_push_pull_output();
+    // Configure button pins with pull-up resistors
+    // Button 1 on GPIO14, Button 2 on GPIO15
+    let button1 = pins.gpio14.into_pull_up_input();
+    let button2 = pins.gpio15.into_pull_up_input();
+
+    // Create button box instance
+    let mut button_box = ButtonBox::new(button1, button2);
+
+    // Set up USB
+    let usb_bus = UsbBusAllocator::new(UsbBus::new(
+        pac.USBCTRL_REGS,
+        pac.USBCTRL_DPRAM,
+        clocks.usb_clock,
+        true,
+        &mut pac.RESETS,
+    ));
+
+    // Create HID class
+    let mut hid = HIDClass::new(&usb_bus, ButtonBoxReport::desc(), 1);
+
+    // Create USB device
+    let mut usb_dev = UsbDeviceBuilder::new(&usb_bus, UsbVidPid(0x16c0, 0x27dd))
+        .strings(&[StringDescriptors::default()
+            .manufacturer("Button Box Co")
+            .product("2-Button Box")
+            .serial_number("001")])
+        .unwrap()
+        .device_class(0x00) // Use interface-specific class
+        .build();
+
+    let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
+
+    info!("Button Box ready!");
 
     loop {
-        info!("on!");
-        led_pin.set_high().unwrap();
-        delay.delay_ms(500);
-        info!("off!");
-        led_pin.set_low().unwrap();
-        delay.delay_ms(500);
+        // Poll USB device
+        if usb_dev.poll(&mut [&mut hid]) {
+            // Check if buttons have changed
+            if button_box.has_changed() {
+                let report = button_box.get_report();
+                info!("Button state changed: {}", report.buttons);
+
+                // Send HID report
+                match hid.push_input(&report) {
+                    Ok(_) => {
+                        debug!("HID report sent successfully");
+                    }
+                    Err(UsbError::WouldBlock) => {
+                        // Host not ready, will try again next loop
+                    }
+                    Err(_e) => {
+                        warn!("Failed to send HID report");
+                    }
+                }
+            }
+        }
+
+        // Small delay to prevent overwhelming the USB bus
+        delay.delay_us(100);
     }
 }
 
