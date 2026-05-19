@@ -142,7 +142,7 @@ fn main() -> ! {
 
     // Configure button pins with pull-up resistors
     // Button 1 on GPIO14, Button 2 on GPIO15
-    let button1 = pins.gpio27.into_pull_down_input();
+    let mut button1 = pins.gpio27.into_pull_down_input();
 
     let led_pin = pins.led.into_push_pull_output();
     // Create button box instance
@@ -175,6 +175,9 @@ fn main() -> ! {
     info!("Button Box ready!");
 
     loop {
+        if button1.is_high().unwrap() {
+            info!("Button 1 pressed");
+        }
         // Poll USB device
         // if usb_dev.poll(&mut [&mut hid]) {
         //     // Check if buttons have changed
@@ -198,7 +201,7 @@ fn main() -> ! {
         // }
 
         // Small delay to prevent overwhelming the USB bus
-        delay.delay_us(10);
+        delay.delay_us(5000);
     }
 }
 
