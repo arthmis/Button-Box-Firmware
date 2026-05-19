@@ -6,28 +6,30 @@
 
 mod hid_descriptor;
 
-use bsp::entry;
+// use bsp::entry;
 use defmt::*;
 use defmt_rtt as _;
 use panic_probe as _;
 
 // Provide an alias for our BSP so we can switch targets quickly.
-use rp_pico::{self as bsp, hal::gpio::SioOutput};
+// use rp_pico::{self as bsp, hal::gpio::SioOutput};
 
-use bsp::hal::{
-    clocks::{init_clocks_and_plls, Clock},
-    gpio::{FunctionSio, Pin, PullDown, SioInput},
-    pac,
-    sio::Sio,
-    usb::UsbBus,
-    watchdog::Watchdog,
-};
+// use bsp::hal::{
+//     clocks::{init_clocks_and_plls, Clock},
+//     gpio::{FunctionSio, Pin, PullDown, SioInput},
+//     pac,
+//     sio::Sio,
+//     usb::UsbBus,
+//     watchdog::Watchdog,
+// };
 
 use usb_device::{class_prelude::*, prelude::*};
-use usbd_hid::{descriptor::generator_prelude::*, hid_class::HIDClass};
+// use usbd_hid::{descriptor::generator_prelude::*, hid_class::HIDClass};
 
-use embedded_hal::digital::InputPin;
-use embedded_hal::digital::OutputPin;
+use embassy_executor::Spawner;
+use embassy_rp::gpio::{Input, Level, Output, Pull};
+// use embedded_hal::digital::InputPin;
+// use embedded_hal::digital::OutputPin;
 
 // HID Report descriptor for a 2-button gamepad
 // #[gen_hid_descriptor(
@@ -47,8 +49,8 @@ use embedded_hal::digital::OutputPin;
 // }
 
 // GPIO pin type aliases for button inputs
-type Button1Pin = Pin<bsp::hal::gpio::bank0::Gpio27, FunctionSio<SioInput>, PullDown>;
-type LedPin = Pin<bsp::hal::gpio::bank0::Gpio25, FunctionSio<SioOutput>, PullDown>;
+// type Button1Pin = Pin<bsp::hal::gpio::bank0::Gpio27, FunctionSio<SioInput>, PullDown>;
+// type LedPin = Pin<bsp::hal::gpio::bank0::Gpio25, FunctionSio<SioOutput>, PullDown>;
 // type Button2Pin = Pin<bsp::hal::gpio::bank0::Gpio15, FunctionSio<SioInput>, PullUp>;
 
 // struct ButtonBox {
@@ -110,73 +112,81 @@ type LedPin = Pin<bsp::hal::gpio::bank0::Gpio25, FunctionSio<SioOutput>, PullDow
 //     }
 // }
 
-#[entry]
-fn main() -> ! {
+#[embassy_executor::main]
+async fn main(_spawner: Spawner) {
+    let p = embassy_rp::init(Default::default());
+    let mut led = Output::new(p.PIN_25, Level::Low);
+    let button = Input::new(p.PIN_27, Pull::Up);
+
     info!("Button Box starting...");
 
-    let mut pac = pac::Peripherals::take().unwrap();
-    let core = pac::CorePeripherals::take().unwrap();
-    let mut watchdog = Watchdog::new(pac.WATCHDOG);
-    let sio = Sio::new(pac.SIO);
+    // let mut pac = pac::Peripherals::take().unwrap();
+    // let core = pac::CorePeripherals::take().unwrap();
+    // let mut watchdog = Watchdog::new(pac.WATCHDOG);
+    // let sio = Sio::new(pac.SIO);
 
     // External high-speed crystal on the pico board is 12Mhz
-    let external_xtal_freq_hz = 12_000_000u32;
-    let clocks = init_clocks_and_plls(
-        external_xtal_freq_hz,
-        pac.XOSC,
-        pac.CLOCKS,
-        pac.PLL_SYS,
-        pac.PLL_USB,
-        &mut pac.RESETS,
-        &mut watchdog,
-    )
-    .ok()
-    .unwrap();
+    // let external_xtal_freq_hz = 12_000_000u32;
+    // let clocks = init_clocks_and_plls(
+    //     external_xtal_freq_hz,
+    //     pac.XOSC,
+    //     pac.CLOCKS,
+    //     pac.PLL_SYS,
+    //     pac.PLL_USB,
+    //     &mut pac.RESETS,
+    //     &mut watchdog,
+    // )
+    // .ok()
+    // .unwrap();
 
-    let pins = bsp::Pins::new(
-        pac.IO_BANK0,
-        pac.PADS_BANK0,
-        sio.gpio_bank0,
-        &mut pac.RESETS,
-    );
+    // let pins = bsp::Pins::new(
+    //     pac.IO_BANK0,
+    //     pac.PADS_BANK0,
+    //     sio.gpio_bank0,
+    //     &mut pac.RESETS,
+    // );
 
     // Configure button pins with pull-up resistors
     // Button 1 on GPIO14, Button 2 on GPIO15
-    let mut button1 = pins.gpio27.into_pull_down_input();
+    // let mut button1 = pins.gpio27.into_pull_down_input();
 
-    let led_pin = pins.led.into_push_pull_output();
+    // let led_pin = pins.led.into_push_pull_output();
     // Create button box instance
     // let mut button_box = ButtonBox::new(button1, led_pin);
 
     // Set up USB
-    let usb_bus = UsbBusAllocator::new(UsbBus::new(
-        pac.USBCTRL_REGS,
-        pac.USBCTRL_DPRAM,
-        clocks.usb_clock,
-        true,
-        &mut pac.RESETS,
-    ));
+    // let usb_bus = UsbBusAllocator::new(UsbBus::new(
+    //     pac.USBCTRL_REGS,
+    //     pac.USBCTRL_DPRAM,
+    //     clocks.usb_clock,
+    //     true,
+    //     &mut pac.RESETS,
+    // ));
 
     // Create HID class
     // let mut hid = HIDClass::new(&usb_bus, ButtonBoxReport::desc(), 1);
 
     // Create USB device
-    let mut usb_dev = UsbDeviceBuilder::new(&usb_bus, UsbVidPid(0x16c0, 0x27dd))
-        .strings(&[StringDescriptors::default()
-            .manufacturer("Button Box Co")
-            .product("2-Button Box")
-            .serial_number("001")])
-        .unwrap()
-        .device_class(0x00) // Use interface-specific class
-        .build();
+    // let mut usb_dev = UsbDeviceBuilder::new(&usb_bus, UsbVidPid(0x16c0, 0x27dd))
+    //     .strings(&[StringDescriptors::default()
+    //         .manufacturer("Button Box Co")
+    //         .product("2-Button Box")
+    //         .serial_number("001")])
+    //     .unwrap()
+    //     .device_class(0x00) // Use interface-specific class
+    //     .build();
 
-    let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
+    // let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
 
     info!("Button Box ready!");
 
     loop {
-        if button1.is_high().unwrap() {
+        // if button1.is_high().unwrap() {
+        if button.is_low() {
             info!("Button 1 pressed");
+            led.set_high();
+        } else {
+            led.set_low();
         }
         // Poll USB device
         // if usb_dev.poll(&mut [&mut hid]) {
@@ -201,7 +211,7 @@ fn main() -> ! {
         // }
 
         // Small delay to prevent overwhelming the USB bus
-        delay.delay_us(5000);
+        // delay.delay_us(5000);
     }
 }
 
